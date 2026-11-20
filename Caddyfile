@@ -1,0 +1,12 @@
+dev.mhanan.com {
+	encode gzip
+
+	# Uncomment to require a login before anyone can reach the app.
+	# Generate the hash with:
+	#   docker compose exec caddy caddy hash-password
+	# basic_auth {
+	# 	admin <paste-hash-here>
+	# }
+
+	reverse_proxy app:7860
+}

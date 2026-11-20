@@ -1,0 +1,36 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    # The app writes neuro_foundry.db and uploads_storage/ relative to its
+    # working directory, so run it from the persistent volume.
+    working_dir: /data
+    command: ["python", "/app/backend/run_server.py"]
+    env_file:
+      - .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: "7860"
+    volumes:
+      - foundry_data:/data
+    expose:
+      - "7860"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  foundry_data:
+  caddy_data:
+  caddy_config:
