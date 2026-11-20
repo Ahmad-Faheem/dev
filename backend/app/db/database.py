@@ -7,8 +7,54 @@ from typing import Any, Dict, List, Optional
 
 DB_FILE = os.path.abspath("./neuro_foundry.db")
 
+# Set DATABASE_URL (postgresql://user:password@host:5432/dbname) to use
+# PostgreSQL. Without it the app falls back to the local SQLite file.
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+USE_POSTGRES = DATABASE_URL.startswith(("postgresql://", "postgres://"))
 
-def get_connection() -> sqlite3.Connection:
+if USE_POSTGRES:
+    import psycopg
+    from psycopg.rows import dict_row
+
+
+class _PgCursor:
+    """Gives a psycopg cursor the small sqlite3-style surface the app uses."""
+
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def execute(self, sql: str, params=()):
+        # Queries are written with sqlite-style "?" placeholders.
+        self._cursor.execute(sql.replace("?", "%s"), tuple(params) if params else None)
+        return self
+
+    def fetchone(self):
+        return self._cursor.fetchone()
+
+    def fetchall(self):
+        return self._cursor.fetchall()
+
+
+class _PgConnection:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def cursor(self) -> _PgCursor:
+        return _PgCursor(self._conn.cursor())
+
+    def execute(self, sql: str, params=()) -> _PgCursor:
+        return self.cursor().execute(sql, params)
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
+
+
+def get_connection():
+    if USE_POSTGRES:
+        return _PgConnection(psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=10))
     conn = sqlite3.connect(DB_FILE, timeout=10.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
@@ -18,7 +64,7 @@ def init_db():
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.executescript("""
+    schema = """
     CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         email TEXT UNIQUE NOT NULL,
@@ -58,7 +104,7 @@ def init_db():
         current_stage TEXT NOT NULL DEFAULT 'queued',
         selected_checks TEXT,
         summary_counts TEXT,
-        duration_seconds REAL DEFAULT 0.0,
+        duration_seconds DOUBLE PRECISION DEFAULT 0.0,
         created_at TEXT NOT NULL,
         completed_at TEXT,
         FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
@@ -91,12 +137,17 @@ def init_db():
         created_at TEXT NOT NULL,
         FOREIGN KEY (finding_id) REFERENCES findings(id) ON DELETE CASCADE
     );
-    """)
+    """
+    if USE_POSTGRES:
+        cursor.execute(schema)
+    else:
+        cursor.executescript(schema)
 
     # Default system user
     cursor.execute("""
-    INSERT OR IGNORE INTO users (id, email, hashed_password, full_name, is_active, created_at)
+    INSERT INTO users (id, email, hashed_password, full_name, is_active, created_at)
     VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT DO NOTHING
     """, (
         "usr_foundry_admin",
         "admin@neurofoundry.local",
